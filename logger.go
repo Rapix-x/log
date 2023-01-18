@@ -32,6 +32,22 @@ var (
 	}
 )
 
+type OutputMode uint8
+
+const (
+	OutputStdOut          OutputMode = 0
+	OutputStdOutAndStdErr OutputMode = 1
+	OutputStdErr          OutputMode = 2
+)
+
+var (
+	outputModes = map[OutputMode]struct{}{
+		OutputStdOut:          {},
+		OutputStdOutAndStdErr: {},
+		OutputStdErr:          {},
+	}
+)
+
 var encoderConfig = zapcore.EncoderConfig{
 	MessageKey:          "msg",
 	LevelKey:            "lvl",
@@ -72,6 +88,10 @@ type Configuration struct {
 	// PIIMode indicates how to the logger resolves PII fields in log
 	// statements.
 	PIIMode PIIMode
+
+	// OutputMode indicates where the logs will be written. Logs can
+	// either be published to stdout, stderr or split between the two.
+	OutputMode OutputMode
 }
 
 type ILogger interface {
@@ -127,26 +147,7 @@ func NewLogger(conf Configuration) (*Logger, error) {
 		return nil, errors.Wrap(err, "received an error while validating the logger configuration")
 	}
 
-	minLvl := zapcore.Level(conf.MinimumLogLevel)
-
-	// Define our level-handling logic to differentiate priority based on log level
-	highPriority := zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
-		return lvl >= zapcore.WarnLevel && lvl >= minLvl
-	})
-	lowPriority := zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
-		return lvl < zapcore.WarnLevel && lvl >= minLvl
-	})
-
-	// Create separate outputs for the different priorities.
-	lowPrioOut := zapcore.Lock(os.Stdout)
-	highPrioOut := zapcore.Lock(os.Stderr)
-	jsonEncoder := zapcore.NewJSONEncoder(encoderConfig)
-
-	// tie it together
-	core := zapcore.NewTee(
-		zapcore.NewCore(jsonEncoder, lowPrioOut, lowPriority),
-		zapcore.NewCore(jsonEncoder, highPrioOut, highPriority),
-	)
+	core := createCore(conf.OutputMode, conf.MinimumLogLevel, zapcore.WarnLevel)
 
 	zapLogger := zap.New(
 		core,
@@ -313,5 +314,52 @@ func validateLoggerConf(conf Configuration) error {
 		return errors.New("invalid PII mode in logger configuration")
 	}
 
+	if _, ok := outputModes[conf.OutputMode]; !ok {
+		return errors.New("invalid output mode in logger configuration")
+	}
+
 	return nil
+}
+
+func createCore(mode OutputMode, minLevel Level, stdErrThresholdLevel zapcore.Level) zapcore.Core {
+	minLvl := zapcore.Level(minLevel)
+
+	if mode == OutputStdOut || mode == OutputStdErr {
+		all := zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
+			return lvl >= minLvl
+		})
+
+		var output zapcore.WriteSyncer
+
+		if mode == OutputStdOut {
+			output = zapcore.Lock(os.Stdout)
+		} else {
+			output = zapcore.Lock(os.Stderr)
+		}
+
+		jsonEncoder := zapcore.NewJSONEncoder(encoderConfig)
+
+		return zapcore.NewCore(jsonEncoder, output, all)
+	}
+
+	// Define our level-handling logic to differentiate priority based on log level
+	highPriority := zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
+		return lvl >= stdErrThresholdLevel && lvl >= minLvl
+	})
+	lowPriority := zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
+		return lvl < stdErrThresholdLevel && lvl >= minLvl
+	})
+
+	// Create separate outputs for the different priorities.
+	lowPrioOut := zapcore.Lock(os.Stdout)
+	highPrioOut := zapcore.Lock(os.Stderr)
+	jsonEncoder := zapcore.NewJSONEncoder(encoderConfig)
+
+	// tie it together
+	core := zapcore.NewTee(
+		zapcore.NewCore(jsonEncoder, lowPrioOut, lowPriority),
+		zapcore.NewCore(jsonEncoder, highPrioOut, highPriority),
+	)
+
+	return core
 }

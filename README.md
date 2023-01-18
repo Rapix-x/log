@@ -24,7 +24,7 @@ to handle PII in any special or different way.**
   - Fatal
 - Timestamp format: RFC 3339
 - Log format: JSON
-- Output destinations: stdout (< Warn), stderr (>= Warn)
+- Output destinations: stdout, stderr or split between the two at warn level (everything below to stdout all else to stderr)
 - Caller info: included
 - Stacktrace: only enabled for warn and above
 - Key names:
