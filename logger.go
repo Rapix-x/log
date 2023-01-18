@@ -1,6 +1,8 @@
 package log
 
 import (
+	"os"
+
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -30,13 +32,6 @@ var (
 	}
 )
 
-type encoding string
-
-const (
-	encodingConsole encoding = "console" // nolint
-	encodingJSON    encoding = "json"
-)
-
 var encoderConfig = zapcore.EncoderConfig{
 	MessageKey:          "msg",
 	LevelKey:            "lvl",
@@ -53,16 +48,6 @@ var encoderConfig = zapcore.EncoderConfig{
 	EncodeCaller:        zapcore.ShortCallerEncoder,
 	EncodeName:          nil,
 	NewReflectedEncoder: nil,
-}
-
-var loggerConf = zap.Config{
-	Development:       false,
-	DisableCaller:     false,
-	DisableStacktrace: true,
-	Encoding:          string(encodingJSON),
-	EncoderConfig:     encoderConfig,
-	OutputPaths:       []string{"stdout"},
-	ErrorOutputPaths:  []string{"stderr"},
 }
 
 // Configuration represents a Configuration object for a logger.
@@ -87,6 +72,26 @@ type Configuration struct {
 	// PIIMode indicates how to the logger resolves PII fields in log
 	// statements.
 	PIIMode PIIMode
+}
+
+type ILogger interface {
+	Debug(v ...any)
+	Debugf(format string, v ...any)
+	Debugw(msg string, keyValuePairs ...any)
+	Error(v ...any)
+	Errorf(format string, v ...any)
+	Errorw(msg string, keyValuePairs ...any)
+	Fatal(v ...any)
+	Fatalf(format string, v ...any)
+	Fatalw(msg string, keyValuePairs ...any)
+	Info(v ...any)
+	Infof(format string, v ...any)
+	Infow(msg string, keyValuePairs ...any)
+	Sync() error
+	Warn(v ...any)
+	Warnf(format string, v ...any)
+	Warnw(msg string, keyValuePairs ...any)
+	With(keyValuePairs ...any) *Logger
 }
 
 // The Logger struct resembles the actual loggers.
@@ -122,24 +127,36 @@ func NewLogger(conf Configuration) (*Logger, error) {
 		return nil, errors.Wrap(err, "received an error while validating the logger configuration")
 	}
 
-	loggerConf.Level = zap.NewAtomicLevelAt(zapcore.Level(conf.MinimumLogLevel))
-	loggerConf.InitialFields = make(map[string]interface{}, 0)
+	minLvl := zapcore.Level(conf.MinimumLogLevel)
 
-	if conf.ApplicationName != "" {
-		loggerConf.InitialFields["app"] = conf.ApplicationName
-	}
+	// Define our level-handling logic to differentiate priority based on log level
+	highPriority := zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
+		return lvl >= zapcore.WarnLevel && lvl >= minLvl
+	})
+	lowPriority := zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
+		return lvl < zapcore.WarnLevel && lvl >= minLvl
+	})
 
-	if conf.Version != "" {
-		loggerConf.InitialFields["version"] = conf.Version
-	}
+	// Create separate outputs for the different priorities.
+	lowPrioOut := zapcore.Lock(os.Stdout)
+	highPrioOut := zapcore.Lock(os.Stderr)
+	jsonEncoder := zapcore.NewJSONEncoder(encoderConfig)
 
-	zapLogger, err := loggerConf.Build(
-		zap.AddStacktrace(zapcore.WarnLevel),
-		zap.AddCallerSkip(1),
+	// tie it together
+	core := zapcore.NewTee(
+		zapcore.NewCore(jsonEncoder, lowPrioOut, lowPriority),
+		zapcore.NewCore(jsonEncoder, highPrioOut, highPriority),
 	)
-	if err != nil {
-		return nil, errors.Wrap(err, "could not create logger")
-	}
+
+	zapLogger := zap.New(
+		core,
+		zap.AddCaller(),
+		zap.AddCallerSkip(1),
+		zap.Fields(
+			zap.String("app", conf.ApplicationName),
+			zap.String("version", conf.Version),
+		),
+	)
 
 	return &Logger{
 		logger:  zapLogger.Sugar(),

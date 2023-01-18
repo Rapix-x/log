@@ -81,6 +81,7 @@ linters:
     - golint
     - gomnd
     - gomoddirectives
+    - interfacebloat
     - interfacer
     - lll
     - maligned
