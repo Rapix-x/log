@@ -49,9 +49,9 @@ var (
 )
 
 var encoderConfig = zapcore.EncoderConfig{
-	MessageKey:          "msg",
-	LevelKey:            "lvl",
-	TimeKey:             "ts",
+	MessageKey:          "message",
+	LevelKey:            "severity",
+	TimeKey:             "timestamp",
 	NameKey:             "name",
 	CallerKey:           "caller",
 	FunctionKey:         "func",
@@ -64,6 +64,16 @@ var encoderConfig = zapcore.EncoderConfig{
 	EncodeCaller:        zapcore.ShortCallerEncoder,
 	EncodeName:          nil,
 	NewReflectedEncoder: nil,
+}
+
+type KeyNames struct {
+	MessageKey    string
+	LevelKey      string
+	TimeKey       string
+	NameKey       string
+	CallerKey     string
+	FunctionKey   string
+	StacktraceKey string
 }
 
 // Configuration represents a Configuration object for a logger.
@@ -92,6 +102,10 @@ type Configuration struct {
 	// OutputMode indicates where the logs will be written. Logs can
 	// either be published to stdout, stderr or split between the two.
 	OutputMode OutputMode
+
+	// KeyNames lets you overwrite the standard key names for common
+	// log fields.
+	KeyNames KeyNames
 }
 
 type ILogger interface {
@@ -149,13 +163,22 @@ func NewLogger(conf Configuration) (*Logger, error) {
 
 	core := createCore(conf.OutputMode, conf.MinimumLogLevel, zapcore.WarnLevel)
 
+	fields := make([]zap.Field, 0, 2)
+
+	if conf.ApplicationName != "" {
+		fields = append(fields, zap.String("app", conf.ApplicationName))
+	}
+
+	if conf.Version != "" {
+		fields = append(fields, zap.String("version", conf.Version))
+	}
+
 	zapLogger := zap.New(
 		core,
 		zap.AddCaller(),
 		zap.AddCallerSkip(1),
 		zap.Fields(
-			zap.String("app", conf.ApplicationName),
-			zap.String("version", conf.Version),
+			fields...,
 		),
 	)
 
@@ -362,4 +385,38 @@ func createCore(mode OutputMode, minLevel Level, stdErrThresholdLevel zapcore.Le
 	)
 
 	return core
+}
+
+func getEncoderConfig(keyNames KeyNames) zapcore.EncoderConfig {
+	out := encoderConfig
+
+	if keyNames.MessageKey != "" {
+		encoderConfig.MessageKey = keyNames.MessageKey
+	}
+
+	if keyNames.LevelKey != "" {
+		encoderConfig.LevelKey = keyNames.LevelKey
+	}
+
+	if keyNames.TimeKey != "" {
+		encoderConfig.TimeKey = keyNames.TimeKey
+	}
+
+	if keyNames.NameKey != "" {
+		encoderConfig.NameKey = keyNames.NameKey
+	}
+
+	if keyNames.CallerKey != "" {
+		encoderConfig.CallerKey = keyNames.CallerKey
+	}
+
+	if keyNames.FunctionKey != "" {
+		encoderConfig.FunctionKey = keyNames.FunctionKey
+	}
+
+	if keyNames.StacktraceKey != "" {
+		encoderConfig.StacktraceKey = keyNames.StacktraceKey
+	}
+
+	return out
 }
